@@ -5,11 +5,16 @@ import numpy as np
 import cv2
 import traceback
 import os
+
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
+
+# ---- PRELOAD MODEL ONCE ----
+print("🚀 Loading DeepFace gender model...")
+gender_model = DeepFace.build_model("Gender")
+print("✅ Gender model loaded")
 
 def classify_gender(image_bytes, min_confidence=60):
-    # Decode image from memory
     np_img = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
@@ -19,34 +24,25 @@ def classify_gender(image_bytes, min_confidence=60):
     result = DeepFace.analyze(
         img,
         actions=["gender"],
-        detector_backend="mtcnn",
-        enforce_detection=True,
+        detector_backend="opencv",   # MUCH lighter
+        enforce_detection=False,     # critical for stability
         align=False
     )
 
-    # Extract gender probabilities
-    if isinstance(result, list):
-        gender_scores = result[0]["gender"]
-    else:
-        gender_scores = result["gender"]
-    
+    gender_scores = result[0]["gender"] if isinstance(result, list) else result["gender"]
+
     predicted_gender = max(gender_scores, key=gender_scores.get)
     confidence = float(gender_scores[predicted_gender])
 
-
-    # Clean up
-    del img
-    del np_img
-
-    # Confidence check
     if confidence < min_confidence:
-        raise ValueError(f"Low confidence ({confidence:.2f}%), please retry")
+        raise ValueError(f"Low confidence ({confidence:.2f}%)")
 
     return predicted_gender, confidence
 
+
 @app.route("/", methods=["GET"])
 def home():
-     return {"status": "ok"}
+    return {"status": "ok"}
 
 
 @app.route("/predict_gender", methods=["POST"])
@@ -54,26 +50,19 @@ def predict_gender():
     if "image" not in request.files:
         return jsonify({"error": "No image file provided"}), 400
 
-    file = request.files["image"]
-    image_bytes = file.read()
-
     try:
+        image_bytes = request.files["image"].read()
         gender, confidence = classify_gender(image_bytes)
-        return jsonify({
-            "gender": gender,
-            "confidence": confidence
-        })
-    except ValueError as ve:
-        print("❌ ValueError:", ve)
-        traceback.print_exc()
-        return jsonify({"error": str(ve)}), 400
+        return jsonify({"gender": gender, "confidence": confidence})
+
     except Exception as e:
-        print("🔥 UNEXPECTED ERROR:", e)
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)}), 400
+
 
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False,threaded=False)
+
